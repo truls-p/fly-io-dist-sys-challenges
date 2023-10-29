@@ -1,6 +1,8 @@
 use anyhow::{bail, Context};
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::{StdoutLock, Write};
 use uuid::Uuid;
 
@@ -52,9 +54,10 @@ enum Payload {
     InitOk,
 }
 
-pub struct EchoNode {
+pub struct EchoNode<'a> {
     node_id: Option<String>,
     node_msg_id: usize,
+    output: StdoutLock<'a>,
     broadcast_ids: Vec<usize>,
     // Other nodes from topology message and the
     // broadcast index we've sent them
@@ -62,106 +65,111 @@ pub struct EchoNode {
     min_index: usize,
 }
 
-impl EchoNode {
-    pub fn new() -> Self {
-        EchoNode {
-            node_id: None,
-            node_msg_id: 0,
-            broadcast_ids: Vec::new(),
-            other_nodes_sent: HashMap::new(),
-            min_index: 0,
+impl<'a> EchoNode<'a> {
+    pub fn new(init_msg: Message, mut output: StdoutLock<'a>) -> Self {
+        if let Payload::Init { node_id, node_ids } = init_msg.body.payload {
+            debug!("inside EchoNode::new");
+            let reply = Message {
+                src: init_msg.dest,
+                dest: init_msg.src,
+                body: Body {
+                    msg_id: Some(0),
+                    in_reply_to: init_msg.body.msg_id,
+                    payload: Payload::InitOk,
+                },
+            };
+            serde_json::to_writer(&mut output, &reply)
+                .context("serialize response to init")
+                .unwrap();
+            output
+                .write_all(b"\n")
+                .context("write trailing newline")
+                .unwrap();
+            let mut other_nodes_sent: HashMap<String, usize> = HashMap::new();
+            for k in node_ids.iter() {
+                other_nodes_sent.insert(k.to_string(), 0);
+            }
+            EchoNode {
+                node_id: Some(node_id.clone()),
+                node_msg_id: 1,
+                output: output,
+                broadcast_ids: Vec::new(),
+                other_nodes_sent: other_nodes_sent,
+                min_index: 0,
+            }
+        } else {
+            error!("Expected Init message as first message");
+            panic!("")
         }
     }
-    pub fn step(&mut self, input: Message, output: &mut StdoutLock) -> anyhow::Result<()> {
+    pub fn create_message(
+        &self,
+        src: String,
+        dest: String,
+        in_reply_to: Option<usize>,
+        payload: Payload,
+    ) -> Message {
+        let msg_id = Some(self.node_msg_id);
+        let body = Body {
+            msg_id,
+            in_reply_to,
+            payload,
+        };
+        Message { src, dest, body }
+    }
+    pub fn send(&mut self, msg: Message) -> anyhow::Result<()> {
+        serde_json::to_writer(&mut self.output, &msg).context("serialize response to Generate")?;
+        self.output
+            .write_all(b"\n")
+            .context("write trailing newline")?;
+        self.node_msg_id += 1;
+        Ok(())
+    }
+    pub fn write_message(
+        &mut self,
+        src: String,
+        dest: String,
+        in_reply_to: Option<usize>,
+        payload: Payload,
+    ) -> anyhow::Result<()> {
+        let msg = self.create_message(src, dest, in_reply_to, payload);
+        self.send(msg)
+    }
+    pub fn step(&mut self, input: Message) -> anyhow::Result<()> {
         match input.body.payload {
-            Payload::Init { node_id, node_ids } => {
-                let reply = Message {
-                    src: input.dest,
-                    dest: input.src,
-                    body: Body {
-                        msg_id: Some(self.node_msg_id),
-                        in_reply_to: input.body.msg_id,
-                        payload: Payload::InitOk,
-                    },
-                };
-                serde_json::to_writer(&mut *output, &reply)
-                    .context("serialize response to init")?;
-                output.write_all(b"\n").context("write trailing newline")?;
-                self.node_msg_id += 1;
-                self.node_id = Some(node_id.clone());
-                for k in node_ids.iter() {
-                    if self.other_nodes_sent.contains_key(k) {
-                        continue;
-                    }
-                    self.other_nodes_sent.insert(k.to_string(), 0);
-                }
+            Payload::Init { .. } => {
+                bail!("Should've already processed init message");
             }
             Payload::Echo { echo } => {
-                let reply = Message {
-                    src: input.dest,
-                    dest: input.src,
-                    body: Body {
-                        msg_id: Some(self.node_msg_id),
-                        in_reply_to: input.body.msg_id,
-                        payload: Payload::EchoOk { echo },
-                    },
-                };
-                serde_json::to_writer(&mut *output, &reply)
-                    .context("serialize response to Echo")?;
-                output.write_all(b"\n").context("write trailing newline")?;
-                self.node_msg_id += 1;
+                self.write_message(
+                    input.dest,
+                    input.src,
+                    input.body.msg_id,
+                    Payload::EchoOk { echo },
+                )?;
             }
             Payload::Generate { .. } => {
                 let id = Uuid::new_v4();
-                let reply = Message {
-                    src: input.dest,
-                    dest: input.src,
-                    body: Body {
-                        msg_id: Some(self.node_msg_id),
-                        in_reply_to: input.body.msg_id,
-                        payload: Payload::GenerateOk { id: id.to_string() },
-                    },
-                };
-                serde_json::to_writer(&mut *output, &reply)
-                    .context("serialize response to Generate")?;
-                output.write_all(b"\n").context("write trailing newline")?;
-                self.node_msg_id += 1;
+                let payload = Payload::GenerateOk { id: id.to_string() };
+                self.write_message(input.dest, input.src, input.body.msg_id, payload)?;
             }
             Payload::Broadcast { message } => {
                 if !self.broadcast_ids.contains(&message) {
                     dbg!("Need to push {message} to broadcast_ids");
                     self.broadcast_ids.push(message);
                 }
-                let reply = Message {
-                    src: input.dest,
-                    dest: input.src,
-                    body: Body {
-                        msg_id: Some(self.node_msg_id),
-                        in_reply_to: input.body.msg_id,
-                        payload: Payload::BroadcastOk,
-                    },
-                };
-                serde_json::to_writer(&mut *output, &reply)
-                    .context("serialize response to Broadcast")?;
-                output.write_all(b"\n").context("write trailing newline")?;
-                self.node_msg_id += 1;
+                self.write_message(
+                    input.dest,
+                    input.src,
+                    input.body.msg_id,
+                    Payload::BroadcastOk,
+                )?;
             }
             Payload::Read { .. } => {
-                let reply = Message {
-                    src: input.dest,
-                    dest: input.src,
-                    body: Body {
-                        msg_id: Some(self.node_msg_id),
-                        in_reply_to: input.body.msg_id,
-                        payload: Payload::ReadOk {
-                            messages: self.broadcast_ids.clone(),
-                        },
-                    },
+                let payload = Payload::ReadOk {
+                    messages: self.broadcast_ids.clone(),
                 };
-                serde_json::to_writer(&mut *output, &reply)
-                    .context("serialize response to Read")?;
-                output.write_all(b"\n").context("write trailing newline")?;
-                self.node_msg_id += 1;
+                self.write_message(input.dest, input.src, input.body.msg_id, payload)?;
             }
             Payload::Topology { topology } => {
                 for k in topology.keys() {
@@ -170,19 +178,12 @@ impl EchoNode {
                     }
                     self.other_nodes_sent.insert(k.to_string(), 0);
                 }
-                let reply = Message {
-                    src: input.dest,
-                    dest: input.src,
-                    body: Body {
-                        msg_id: Some(self.node_msg_id),
-                        in_reply_to: input.body.msg_id,
-                        payload: Payload::TopologyOk,
-                    },
-                };
-                serde_json::to_writer(&mut *output, &reply)
-                    .context("serialize response to Topology")?;
-                output.write_all(b"\n").context("write trailing newline")?;
-                self.node_msg_id += 1;
+                self.write_message(
+                    input.dest,
+                    input.src,
+                    input.body.msg_id,
+                    Payload::TopologyOk,
+                )?;
             }
             Payload::EchoOk { .. } => {}
             Payload::InitOk { .. } => bail!("received InitOk message"),
@@ -193,46 +194,42 @@ impl EchoNode {
         }
 
         if self.min_index < self.broadcast_ids.len() && self.other_nodes_sent.keys().len() != 0 {
+            info!("Need to propagate broadcast messages");
+            let _ = self.propagate_broadcast_messages();
             // Need to broadcast some messages to other nodes in topology
-            dbg!("Need to send broadcast messages");
-            dbg!(
-                "min_index: {}, broadcast_ids: {}, other_nodes_sent: {}",
-                &self.min_index,
-                &self.broadcast_ids,
-                &self.other_nodes_sent
-            );
-            for (key, val) in self.other_nodes_sent.iter_mut() {
-                dbg!("Sending broadcast to: {}", key);
-                if *val < self.broadcast_ids.len() {
-                    let ids_to_send = &self.broadcast_ids[*val..];
-                    dbg!("Need to send the following ids: {}", ids_to_send);
-                    for id in ids_to_send {
-                        if key == self.node_id.as_ref().unwrap() {
-                            dbg!("don't send same value to oneself");
-                            self.node_msg_id += 1;
-                            continue;
-                        }
-                        dbg!("Sending broadcast to: {}, with val: {}", key, *val);
-                        let broadcast = Message {
-                            src: self.node_id.clone().unwrap(),
-                            dest: key.clone(),
-                            body: Body {
-                                msg_id: Some(self.node_msg_id),
-                                in_reply_to: None,
-                                payload: Payload::Broadcast { message: *id },
-                            },
-                        };
-                        dbg!(broadcast.clone());
-                        serde_json::to_writer(&mut *output, &broadcast)
-                            .context("serialize response to Echo")?;
-                        output.write_all(b"\n").context("write trailing newline")?;
-                        self.node_msg_id += 1;
-                    }
-                    *val = self.broadcast_ids.len();
-                }
-            }
         }
 
+        Ok(())
+    }
+
+    fn propagate_broadcast_messages(&mut self) -> anyhow::Result<()> {
+        let mut msgs: Vec<Message> = Vec::new();
+        for (key, val) in self.other_nodes_sent.iter() {
+            // don't send messages to ourselves
+            if key == self.node_id.as_ref().unwrap() {
+                self.node_msg_id += 1;
+                continue;
+            }
+            // have already sent all messages
+            if *val >= self.broadcast_ids.len() {
+                continue;
+            }
+            let ids_to_send = &self.broadcast_ids[*val..];
+            for id in ids_to_send {
+                msgs.push(self.create_message(
+                    self.node_id.clone().unwrap(),
+                    key.clone(),
+                    None,
+                    Payload::Broadcast { message: *id },
+                ));
+            }
+        }
+        for msg in msgs {
+            self.send(msg)?;
+        }
+        for (_key, val) in self.other_nodes_sent.iter_mut() {
+            *val = self.broadcast_ids.len();
+        }
         Ok(())
     }
 }
