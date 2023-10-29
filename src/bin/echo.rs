@@ -1,5 +1,5 @@
-use fly::msg::{Message, EchoNode};
-use anyhow::{Context};
+use anyhow::Context;
+use fly::msg::{EchoNode, Message};
 
 fn main() -> anyhow::Result<()> {
     let stdin = std::io::stdin().lock();
