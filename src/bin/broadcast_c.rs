@@ -35,6 +35,7 @@ fn main() -> anyhow::Result<()> {
         let stdin = std::io::stdin().lock();
         for line in stdin.lines() {
             let line = line.context("Malestrom line from STDIN not read")?;
+            debug!("{:?}", &line);
             let input: Message = serde_json::from_str(&line).context("could not deserialize")?;
             if let Err(_) = tx.send(Event::Message(input)) {
                 return Ok::<_, anyhow::Error>(());

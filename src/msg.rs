@@ -122,7 +122,7 @@ impl<'a> EchoNode<'a> {
                         .unwrap();
                     let other_nodes_seen: HashMap<String, HashSet<usize>> = HashMap::new();
                     thread::spawn(move || loop {
-                        std::thread::sleep(Duration::from_millis(500));
+                        std::thread::sleep(Duration::from_millis(50));
                         tx.send(Event::Injected(Injected::GossipNow)).unwrap();
                     });
 
@@ -262,9 +262,6 @@ impl<'a> EchoNode<'a> {
     }
 
     fn propagate_broadcast_messages(&mut self) -> anyhow::Result<()> {
-        // let mut msgs: Vec<Message> = Vec::new();
-
-        let mut key_ids_to_send: HashMap<String, Vec<usize>> = HashMap::new();
 
         for key in self
             .other_nodes_seen
@@ -283,6 +280,10 @@ impl<'a> EchoNode<'a> {
             let mut ids = self.broadcast_ids.clone();
             debug!("ids: {:?}", ids);
             let seen = self.other_nodes_seen.get(key).unwrap();
+            if *seen == ids {
+                debug!("No need to send gossip, ids and seen the same");
+                continue;
+            }
             debug!("seen: {:?}", seen);
             let ids: Vec<_> = ids.difference(seen).cloned().collect();
             let mut rng = &mut rand::thread_rng();
@@ -291,7 +292,7 @@ impl<'a> EchoNode<'a> {
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>()
-                .choose_multiple(&mut rng, 10)
+                .choose_multiple(&mut rng, self.broadcast_ids.len() / 10 )
                 .cloned()
                 .collect();
             debug!("extra: {:?}", extra);
@@ -308,16 +309,6 @@ impl<'a> EchoNode<'a> {
             );
             self.send(msg)?;
         }
-        /*
-        for msg in msgs.iter() {
-            self.send(msg.clone())?;
-        }
-        */
-        /*
-        for (_key, val) in self.other_nodes_seen.iter_mut() {
-            *val = self.broadcast_ids.clone();
-        }
-        */
         Ok(())
     }
 }
