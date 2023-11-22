@@ -219,15 +219,28 @@ impl<'a> EchoNode<'a> {
                 }
                 Payload::Topology { ref topology } => {
                     debug!("Received Topology message: {:?}", input.clone());
-                    for (k, v) in topology.iter() {
-                        if k != self.node_id.as_ref().unwrap() {
-                            continue;
-                        }
-                        for node in v.iter() {
-                            debug!("Adding to topology: {:?}", node.to_string());
+                    if self.node_id.clone().unwrap() == "n0" {
+                        debug!("n0 so adding all");
+                        for (k, v) in topology.iter() {
+                            /*
+                            if k != self.node_id.as_ref().unwrap() {
+                                continue;
+                            }
+                            */
                             self.other_nodes_seen
-                                .insert(node.to_string(), HashSet::new());
+                                .insert(k.to_string(), HashSet::new());
+                            /*
+                            for node in v.iter() {
+                                debug!("Adding to topology: {:?}", node.to_string());
+                                self.other_nodes_seen
+                                    .insert(node.to_string(), HashSet::new());
+                            }
+                            */
                         }
+                    } else {
+                        debug!("not n0 so adding only n0");
+                        self.other_nodes_seen
+                            .insert("n0".to_string(), HashSet::new());
                     }
                     debug!("Topology after populating: {:?}", self.other_nodes_seen);
                     self.write_message(
