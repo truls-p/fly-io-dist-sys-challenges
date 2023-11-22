@@ -122,7 +122,7 @@ impl<'a> EchoNode<'a> {
                         .unwrap();
                     let other_nodes_seen: HashMap<String, HashSet<usize>> = HashMap::new();
                     thread::spawn(move || loop {
-                        std::thread::sleep(Duration::from_millis(50));
+                        std::thread::sleep(Duration::from_millis(30));
                         tx.send(Event::Injected(Injected::GossipNow)).unwrap();
                     });
 
