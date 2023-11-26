@@ -1,5 +1,5 @@
 use anyhow::Context;
-use fly::msg::{EchoNode, Event, Injected, Message};
+use fly::msg::{EchoNode, Event, Message};
 use log::{debug, info};
 use std::io::BufRead;
 use std::sync::mpsc::channel;

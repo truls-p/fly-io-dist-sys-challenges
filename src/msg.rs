@@ -1,7 +1,7 @@
 use anyhow::{bail, Context};
-use log::{debug, error, info};
+use log::{debug, error};
 use rand::seq::SliceRandom;
-use rand::Rng;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -99,7 +99,7 @@ impl<'a> EchoNode<'a> {
             Event::Message(init_msg) => {
                 if let Payload::Init {
                     ref node_id,
-                    ref node_ids,
+                    node_ids: _,
                 } = init_msg.body.payload
                 {
                     debug!("inside EchoNode::new");
@@ -221,7 +221,7 @@ impl<'a> EchoNode<'a> {
                     debug!("Received Topology message: {:?}", input.clone());
                     if self.node_id.clone().unwrap() == "n0" {
                         debug!("n0 so adding all");
-                        for (k, v) in topology.iter() {
+                        for (k, _v) in topology.iter() {
                             /*
                             if k != self.node_id.as_ref().unwrap() {
                                 continue;
@@ -266,7 +266,7 @@ impl<'a> EchoNode<'a> {
                 Payload::ReadOk { .. } => bail!("received ReadOk message"),
                 Payload::TopologyOk { .. } => bail!("received TopologyOk message"),
             },
-            Event::Injected(input) => {
+            Event::Injected(_input) => {
                 let _ = self.propagate_broadcast_messages();
             }
         }
@@ -290,7 +290,7 @@ impl<'a> EchoNode<'a> {
             }
             debug!("working on: {:?}", key);
             // let mut ids = self.broadcast_ids.iter().cloned().collect::<Vec<_>>();
-            let mut ids = self.broadcast_ids.clone();
+            let ids = self.broadcast_ids.clone();
             debug!("ids: {:?}", ids);
             let seen = self.other_nodes_seen.get(key).unwrap();
             if *seen == ids {
