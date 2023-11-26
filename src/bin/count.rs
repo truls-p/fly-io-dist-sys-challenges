@@ -1,5 +1,6 @@
 use anyhow::Context;
-use fly::msg::{EchoNode, Event, Message};
+use fly::msg::{Event, Message};
+use fly::CountNode::{CountNode};
 use log::{debug, info};
 use std::io::BufRead;
 use std::sync::mpsc::channel;
@@ -26,7 +27,7 @@ fn main() -> anyhow::Result<()> {
     .context("failed to deserialize init")?;
 
     info!("Creating node");
-    let mut state = EchoNode::new(Event::Message(init_msg), stdout, tx.clone());
+    let mut state = CountNode::new(Event::Message(init_msg), stdout, tx.clone());
 
     drop(stdin);
     //drop(stdin);

@@ -1,4 +1,6 @@
 pub mod msg;
+pub mod EchoNode;
+pub mod CountNode;
 
 
 
