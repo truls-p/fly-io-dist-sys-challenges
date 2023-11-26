@@ -39,7 +39,7 @@ struct Body {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
-enum Payload {
+pub enum Payload {
     Topology {
         topology: HashMap<String, Vec<String>>,
     },
