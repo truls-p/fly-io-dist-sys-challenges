@@ -45,15 +45,27 @@ pub enum Payload {
     },
     TopologyOk,
     Read,
-    ReadOk {
+    #[serde(rename = "read_ok")]
+    ReadOkEcho {
         messages: Vec<usize>,
     },
+    #[serde(rename = "read_ok")]
+    ReadOkCount {
+        value: usize,
+    },
+    Add {
+        delta: usize,
+    },
+    AddOk,
     Broadcast {
         message: usize,
     },
     BroadcastOk,
-    Gossip {
+    GossipEcho {
         ids: Vec<usize>,
+    },
+    GossipCount {
+        adds: Vec<(String, usize, usize)>,
     },
     Generate,
     GenerateOk {
@@ -71,4 +83,3 @@ pub enum Payload {
     },
     InitOk,
 }
-

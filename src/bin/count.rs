@@ -1,6 +1,6 @@
 use anyhow::Context;
 use fly::msg::{Event, Message};
-use fly::CountNode::{CountNode};
+use fly::CountNode::CountNode;
 use log::{debug, info};
 use std::io::BufRead;
 use std::sync::mpsc::channel;

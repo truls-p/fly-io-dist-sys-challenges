@@ -1,4 +1,4 @@
-use crate::msg::{Message, Injected, Event, Body, Payload};
+use crate::msg::{Body, Event, Injected, Message, Payload};
 use anyhow::{bail, Context};
 use log::{debug, error};
 use rand::seq::SliceRandom;
@@ -151,7 +151,7 @@ impl<'a> EchoNode<'a> {
                     )?;
                 }
                 Payload::Read { .. } => {
-                    let payload = Payload::ReadOk {
+                    let payload = Payload::ReadOkEcho {
                         messages: self.broadcast_ids.clone().into_iter().collect(),
                     };
                     self.write_message(input.dest, input.src, input.body.msg_id, payload)?;
@@ -166,8 +166,7 @@ impl<'a> EchoNode<'a> {
                                 continue;
                             }
                             */
-                            self.other_nodes_seen
-                                .insert(k.to_string(), HashSet::new());
+                            self.other_nodes_seen.insert(k.to_string(), HashSet::new());
                             /*
                             for node in v.iter() {
                                 debug!("Adding to topology: {:?}", node.to_string());
@@ -193,7 +192,8 @@ impl<'a> EchoNode<'a> {
                 Payload::InitOk { .. } => bail!("received InitOk message"),
                 Payload::GenerateOk { .. } => bail!("received GenerateOk message"),
                 Payload::BroadcastOk { .. } => {}
-                Payload::Gossip { ids } => {
+                Payload::GossipCount { .. } => bail!("EchoNode received GossipCount message"),
+                Payload::GossipEcho { ids } => {
                     debug!("received gossip: {:?}, ids: {:?}", &input.src, ids.clone());
                     self.broadcast_ids.extend(ids.clone());
                     self.other_nodes_seen
@@ -202,7 +202,10 @@ impl<'a> EchoNode<'a> {
                         .extend(ids);
                     debug!("other_nodes_seen: {:?}", self.other_nodes_seen);
                 }
-                Payload::ReadOk { .. } => bail!("received ReadOk message"),
+                Payload::ReadOkEcho { .. } => bail!("received ReadOk message"),
+                Payload::ReadOkCount { .. } => bail!("received ReadOk message"),
+                Payload::Add { .. } => bail!("received Add message for EchoNode"),
+                Payload::AddOk { .. } => bail!("received AddOk message"),
                 Payload::TopologyOk { .. } => bail!("received TopologyOk message"),
             },
             Event::Injected(_input) => {
@@ -214,7 +217,6 @@ impl<'a> EchoNode<'a> {
     }
 
     fn propagate_broadcast_messages(&mut self) -> anyhow::Result<()> {
-
         for key in self
             .other_nodes_seen
             .keys()
@@ -244,7 +246,7 @@ impl<'a> EchoNode<'a> {
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>()
-                .choose_multiple(&mut rng, self.broadcast_ids.len() / 10 )
+                .choose_multiple(&mut rng, self.broadcast_ids.len() / 10)
                 .cloned()
                 .collect();
             debug!("extra: {:?}", extra);
@@ -257,7 +259,7 @@ impl<'a> EchoNode<'a> {
                 self.node_id.clone().unwrap(),
                 key.clone(),
                 None,
-                Payload::Gossip { ids: ids_to_send },
+                Payload::GossipEcho { ids: ids_to_send },
             );
             self.send(msg)?;
         }

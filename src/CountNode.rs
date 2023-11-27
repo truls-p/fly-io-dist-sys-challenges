@@ -1,4 +1,4 @@
-use crate::msg::{Message, Injected, Event, Body, Payload};
+use crate::msg::{Body, Event, Injected, Message, Payload};
 use anyhow::{bail, Context};
 use log::{debug, error};
 use rand::seq::SliceRandom;
@@ -15,10 +15,10 @@ pub struct CountNode<'a> {
     node_id: Option<String>,
     node_msg_id: usize,
     output: StdoutLock<'a>,
-    broadcast_ids: HashSet<usize>,
+    operations: HashSet<(String, usize, usize)>,
     // Other nodes from topology message and the
     // broadcast index we've sent them
-    other_nodes_seen: HashMap<String, HashSet<usize>>,
+    other_nodes_seen: HashMap<String, HashSet<(String, usize, usize)>>,
 }
 
 impl<'a> CountNode<'a> {
@@ -38,7 +38,7 @@ impl<'a> CountNode<'a> {
             Event::Message(init_msg) => {
                 if let Payload::Init {
                     ref node_id,
-                    node_ids: _,
+                    ref node_ids,
                 } = init_msg.body.payload
                 {
                     debug!("inside CountNode::new");
@@ -59,9 +59,17 @@ impl<'a> CountNode<'a> {
                         .write_all(b"\n")
                         .context("write trailing newline")
                         .unwrap();
-                    let other_nodes_seen: HashMap<String, HashSet<usize>> = HashMap::new();
+                    let mut other_nodes_seen: HashMap<String, HashSet<(String, usize, usize)>> =
+                        HashMap::new();
+                    for n in node_ids {
+                        if n == node_id {
+                            continue;
+                        }
+                        other_nodes_seen.insert(n.to_string(), HashSet::new());
+                    }
                     thread::spawn(move || loop {
                         std::thread::sleep(Duration::from_millis(30));
+                        debug!("Sending GossipNow");
                         tx.send(Event::Injected(Injected::GossipNow)).unwrap();
                     });
 
@@ -74,7 +82,7 @@ impl<'a> CountNode<'a> {
                         node_id: Some(node_id.clone()),
                         node_msg_id: 1,
                         output: output,
-                        broadcast_ids: HashSet::new(),
+                        operations: HashSet::new(),
                         other_nodes_seen: other_nodes_seen,
                     }
                 } else {
@@ -137,27 +145,30 @@ impl<'a> CountNode<'a> {
                     let payload = Payload::GenerateOk { id: id.to_string() };
                     self.write_message(input.dest, input.src, input.body.msg_id, payload)?;
                 }
-                Payload::Broadcast { message } => {
-                    if !self.broadcast_ids.contains(&message) {
-                        // debug!("Need to push to broadcast_ids: {:?}", message);
-                        self.broadcast_ids.insert(message);
-                        debug!("Current broadcast_ids: {:?}", &self.broadcast_ids);
+                Payload::Add { delta } => {
+                    let inserted = self.operations.insert((
+                        input.src.to_string(),
+                        input
+                            .body
+                            .msg_id
+                            .context("always expect msg_id from maelstrom")?,
+                        delta,
+                    ));
+                    if !inserted {
+                        panic!("Expected value to be inserted: {:?}", input);
                     }
-                    self.write_message(
-                        input.dest,
-                        input.src,
-                        input.body.msg_id,
-                        Payload::BroadcastOk,
-                    )?;
+                    self.write_message(input.dest, input.src, input.body.msg_id, Payload::AddOk)?;
                 }
+                Payload::Broadcast { message } => bail!("didn't expect Broadcast for CountNode"),
                 Payload::Read { .. } => {
-                    let payload = Payload::ReadOk {
-                        messages: self.broadcast_ids.clone().into_iter().collect(),
+                    let payload = Payload::ReadOkCount {
+                        value: self.operations.clone().into_iter().map(|(_, _, x)| x).sum(),
                     };
                     self.write_message(input.dest, input.src, input.body.msg_id, payload)?;
                 }
                 Payload::Topology { ref topology } => {
                     debug!("Received Topology message: {:?}", input.clone());
+                    self.other_nodes_seen = HashMap::new();
                     if self.node_id.clone().unwrap() == "n0" {
                         debug!("n0 so adding all");
                         for (k, _v) in topology.iter() {
@@ -166,8 +177,7 @@ impl<'a> CountNode<'a> {
                                 continue;
                             }
                             */
-                            self.other_nodes_seen
-                                .insert(k.to_string(), HashSet::new());
+                            self.other_nodes_seen.insert(k.to_string(), HashSet::new());
                             /*
                             for node in v.iter() {
                                 debug!("Adding to topology: {:?}", node.to_string());
@@ -193,28 +203,35 @@ impl<'a> CountNode<'a> {
                 Payload::InitOk { .. } => bail!("received InitOk message"),
                 Payload::GenerateOk { .. } => bail!("received GenerateOk message"),
                 Payload::BroadcastOk { .. } => {}
-                Payload::Gossip { ids } => {
-                    debug!("received gossip: {:?}, ids: {:?}", &input.src, ids.clone());
-                    self.broadcast_ids.extend(ids.clone());
-                    self.other_nodes_seen
-                        .get_mut(&input.src)
-                        .unwrap()
-                        .extend(ids);
+                Payload::GossipEcho { .. } => bail!("CountNode received GossipEcho message"),
+                Payload::GossipCount { adds } => {
+                    debug!("received gossip: {:?}, ids: {:?}", &input.src, adds.clone());
+                    for item in adds {
+                        let _ = self.operations.insert(item.clone());
+                        let _ = self
+                            .other_nodes_seen
+                            .get_mut(&input.src)
+                            .unwrap()
+                            .insert(item);
+                    }
+
                     debug!("other_nodes_seen: {:?}", self.other_nodes_seen);
                 }
-                Payload::ReadOk { .. } => bail!("received ReadOk message"),
+                Payload::ReadOkEcho { .. } => bail!("received ReadOk message"),
+                Payload::ReadOkCount { .. } => bail!("received ReadOk message"),
+                Payload::AddOk { .. } => bail!("received AddOk message"),
                 Payload::TopologyOk { .. } => bail!("received TopologyOk message"),
             },
             Event::Injected(_input) => {
-                let _ = self.propagate_broadcast_messages();
+                let _ = self.gossip();
             }
         }
 
         Ok(())
     }
 
-    fn propagate_broadcast_messages(&mut self) -> anyhow::Result<()> {
-
+    fn gossip(&mut self) -> anyhow::Result<()> {
+        debug!("in gossip");
         for key in self
             .other_nodes_seen
             .keys()
@@ -229,7 +246,7 @@ impl<'a> CountNode<'a> {
             }
             debug!("working on: {:?}", key);
             // let mut ids = self.broadcast_ids.iter().cloned().collect::<Vec<_>>();
-            let ids = self.broadcast_ids.clone();
+            let ids = self.operations.clone();
             debug!("ids: {:?}", ids);
             let seen = self.other_nodes_seen.get(key).unwrap();
             if *seen == ids {
@@ -240,16 +257,16 @@ impl<'a> CountNode<'a> {
             let ids: Vec<_> = ids.difference(seen).cloned().collect();
             let mut rng = &mut rand::thread_rng();
             let extra: Vec<_> = self
-                .broadcast_ids
+                .operations
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>()
-                .choose_multiple(&mut rng, self.broadcast_ids.len() / 10 )
+                .choose_multiple(&mut rng, self.operations.len() / 10)
                 .cloned()
                 .collect();
             debug!("extra: {:?}", extra);
             let mut ids_to_send = ids.iter().cloned().collect::<Vec<_>>();
-            ids_to_send.extend(extra.iter());
+            ids_to_send.extend(extra.iter().cloned());
             ids_to_send.sort();
             ids_to_send.dedup();
             debug!("ids_to_send: {:?}", ids_to_send);
@@ -257,7 +274,7 @@ impl<'a> CountNode<'a> {
                 self.node_id.clone().unwrap(),
                 key.clone(),
                 None,
-                Payload::Gossip { ids: ids_to_send },
+                Payload::GossipCount { adds: ids_to_send },
             );
             self.send(msg)?;
         }

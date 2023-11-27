@@ -1,16 +1,11 @@
-pub mod msg;
-pub mod EchoNode;
 pub mod CountNode;
-
-
-
-
+pub mod EchoNode;
+pub mod msg;
 
 #[test]
-fn func_test()  -> anyhow::Result<()> {
-
-//{"id":5,"src":"c2","dest":"n0","body":{"type":"topology","topology":{"n0":["n1"],"n1":["n0"]},"msg_id":1}}
-//{"id":12,"src":"c4","dest":"n0","body":{"type":"broadcast","message":1,"msg_id":2}}
+fn func_test() -> anyhow::Result<()> {
+    //{"id":5,"src":"c2","dest":"n0","body":{"type":"topology","topology":{"n0":["n1"],"n1":["n0"]},"msg_id":1}}
+    //{"id":12,"src":"c4","dest":"n0","body":{"type":"broadcast","message":1,"msg_id":2}}
     let init_msg: Message = serde_json::from_str(
         "{\"src\": \"c1\",\"dest\": \"n0\",\"body\": {\"type\":     \"init\", \"msg_id\":   1, \"node_id\":  \"n0\", \"node_ids\": [\"n1\"]}}"
     )
@@ -45,5 +40,4 @@ fn func_test()  -> anyhow::Result<()> {
     let _ = jh.join().expect("jh expect");
     */
     Ok(())
- }
-    
+}
