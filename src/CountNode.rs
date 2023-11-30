@@ -221,6 +221,9 @@ impl<'a> CountNode<'a> {
                 Payload::ReadOkCount { .. } => bail!("received ReadOk message"),
                 Payload::AddOk { .. } => bail!("received AddOk message"),
                 Payload::TopologyOk { .. } => bail!("received TopologyOk message"),
+                _ => {
+                    bail!("Received unexpected msg for KafkaNode: {:?}", input)
+                }
             },
             Event::Injected(_input) => {
                 let _ = self.gossip();

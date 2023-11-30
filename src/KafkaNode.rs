@@ -11,23 +11,24 @@ use std::thread;
 use std::time::Duration;
 use uuid::Uuid;
 
-pub struct EchoNode<'a> {
+pub struct KafkaNode<'a> {
     node_id: Option<String>,
     node_msg_id: usize,
     output: StdoutLock<'a>,
-    broadcast_ids: HashSet<usize>,
+    logs: HashMap<String, Vec<(usize, usize)>>,
+    committed: HashMap<String, usize>,
     // Other nodes from topology message and the
     // broadcast index we've sent them
-    other_nodes_seen: HashMap<String, HashSet<usize>>,
+    other_nodes_seen: HashMap<String, HashSet<(String, usize, usize)>>,
 }
 
-impl<'a> EchoNode<'a> {
+impl<'a> KafkaNode<'a> {
     pub fn new(
         init_msg: Event<Message, Injected>,
         mut output: StdoutLock<'a>,
         tx: std::sync::mpsc::Sender<Event<Message, Injected>>,
     ) -> Self {
-        debug!("in EchoNode::new");
+        debug!("in KafkaNode::new");
         match init_msg {
             Event::EOF => {
                 panic!("expected init")
@@ -38,10 +39,10 @@ impl<'a> EchoNode<'a> {
             Event::Message(init_msg) => {
                 if let Payload::Init {
                     ref node_id,
-                    node_ids: _,
+                    ref node_ids,
                 } = init_msg.body.payload
                 {
-                    debug!("inside EchoNode::new");
+                    debug!("inside KafkaNode::new");
                     debug!("init_msg: {:?}", init_msg.clone());
                     let reply = Message {
                         src: init_msg.dest,
@@ -59,9 +60,17 @@ impl<'a> EchoNode<'a> {
                         .write_all(b"\n")
                         .context("write trailing newline")
                         .unwrap();
-                    let other_nodes_seen: HashMap<String, HashSet<usize>> = HashMap::new();
+                    let mut other_nodes_seen: HashMap<String, HashSet<(String, usize, usize)>> =
+                        HashMap::new();
+                    for n in node_ids {
+                        if n == node_id {
+                            continue;
+                        }
+                        other_nodes_seen.insert(n.to_string(), HashSet::new());
+                    }
                     thread::spawn(move || loop {
                         std::thread::sleep(Duration::from_millis(30));
+                        debug!("Sending GossipNow");
                         tx.send(Event::Injected(Injected::GossipNow)).unwrap();
                     });
 
@@ -70,11 +79,12 @@ impl<'a> EchoNode<'a> {
                         other_nodes_seen.insert(k.to_string(), HashSet::new());
                     }
                     */
-                    EchoNode {
+                    KafkaNode {
                         node_id: Some(node_id.clone()),
                         node_msg_id: 1,
                         output: output,
-                        broadcast_ids: HashSet::new(),
+                        logs: HashMap::new(),
+                        committed: HashMap::new(),
                         other_nodes_seen: other_nodes_seen,
                     }
                 } else {
@@ -121,43 +131,35 @@ impl<'a> EchoNode<'a> {
         match input {
             Event::EOF => {}
             Event::Message(input) => match input.body.payload {
-                Payload::Init { .. } => {
-                    bail!("Should've already processed init message");
-                }
-                Payload::Echo { echo } => {
+                Payload::Send { key, msg } => {
+                    let entry = self.logs.entry(key).or_insert(Vec::new());
+                    let offset = entry[..].last().unwrap_or(&(0, 0)).0 + 1 as usize;
+                    entry.push((offset, msg));
                     self.write_message(
                         input.dest,
                         input.src,
                         input.body.msg_id,
-                        Payload::EchoOk { echo },
+                        Payload::SendOk{offset},
                     )?;
                 }
+                Payload::SendOk { offset } => {bail!("didn't expect SendOk")}
+                Payload::Poll { offsets } => {
+
+
+                }
+                Payload::PollOk { msgs } => {}
+                Payload::CommitOffsets { offsets } => {}
+                Payload::CommitOffsetsOk { .. } => {}
+                Payload::ListCommittedOffsets { keys } => {}
+                Payload::ListCommittedOffsetsOk { offsets } => {}
                 Payload::Generate { .. } => {
                     let id = Uuid::new_v4();
                     let payload = Payload::GenerateOk { id: id.to_string() };
                     self.write_message(input.dest, input.src, input.body.msg_id, payload)?;
                 }
-                Payload::Broadcast { message } => {
-                    if !self.broadcast_ids.contains(&message) {
-                        // debug!("Need to push to broadcast_ids: {:?}", message);
-                        self.broadcast_ids.insert(message);
-                        debug!("Current broadcast_ids: {:?}", &self.broadcast_ids);
-                    }
-                    self.write_message(
-                        input.dest,
-                        input.src,
-                        input.body.msg_id,
-                        Payload::BroadcastOk,
-                    )?;
-                }
-                Payload::Read { .. } => {
-                    let payload = Payload::ReadOkEcho {
-                        messages: self.broadcast_ids.clone().into_iter().collect(),
-                    };
-                    self.write_message(input.dest, input.src, input.body.msg_id, payload)?;
-                }
                 Payload::Topology { ref topology } => {
                     debug!("Received Topology message: {:?}", input.clone());
+                    self.other_nodes_seen = HashMap::new();
                     if self.node_id.clone().unwrap() == "n0" {
                         debug!("n0 so adding all");
                         for (k, _v) in topology.iter() {
@@ -188,38 +190,21 @@ impl<'a> EchoNode<'a> {
                         Payload::TopologyOk,
                     )?;
                 }
-                Payload::EchoOk { .. } => {}
-                Payload::InitOk { .. } => bail!("received InitOk message"),
-                Payload::GenerateOk { .. } => bail!("received GenerateOk message"),
-                Payload::BroadcastOk { .. } => {}
-                Payload::GossipCount { .. } => bail!("EchoNode received GossipCount message"),
-                Payload::GossipEcho { ids } => {
-                    debug!("received gossip: {:?}, ids: {:?}", &input.src, ids.clone());
-                    self.broadcast_ids.extend(ids.clone());
-                    self.other_nodes_seen
-                        .get_mut(&input.src)
-                        .unwrap()
-                        .extend(ids);
-                    debug!("other_nodes_seen: {:?}", self.other_nodes_seen);
-                }
-                Payload::ReadOkEcho { .. } => bail!("received ReadOk message"),
-                Payload::ReadOkCount { .. } => bail!("received ReadOk message"),
-                Payload::Add { .. } => bail!("received Add message for EchoNode"),
-                Payload::AddOk { .. } => bail!("received AddOk message"),
-                Payload::TopologyOk { .. } => bail!("received TopologyOk message"),
                 _ => {
                     bail!("Received unexpected msg for KafkaNode: {:?}", input)
                 }
             },
             Event::Injected(_input) => {
-                let _ = self.propagate_broadcast_messages();
+                let _ = self.gossip();
             }
         }
 
         Ok(())
     }
 
-    fn propagate_broadcast_messages(&mut self) -> anyhow::Result<()> {
+    fn gossip(&mut self) -> anyhow::Result<()> {
+        /*
+        debug!("in gossip");
         for key in self
             .other_nodes_seen
             .keys()
@@ -234,7 +219,7 @@ impl<'a> EchoNode<'a> {
             }
             debug!("working on: {:?}", key);
             // let mut ids = self.broadcast_ids.iter().cloned().collect::<Vec<_>>();
-            let ids = self.broadcast_ids.clone();
+            let ids = self.operations.clone();
             debug!("ids: {:?}", ids);
             let seen = self.other_nodes_seen.get(key).unwrap();
             if *seen == ids {
@@ -245,16 +230,16 @@ impl<'a> EchoNode<'a> {
             let ids: Vec<_> = ids.difference(seen).cloned().collect();
             let mut rng = &mut rand::thread_rng();
             let extra: Vec<_> = self
-                .broadcast_ids
+                .operations
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>()
-                .choose_multiple(&mut rng, self.broadcast_ids.len() / 10)
+                .choose_multiple(&mut rng, self.operations.len() / 10)
                 .cloned()
                 .collect();
             debug!("extra: {:?}", extra);
             let mut ids_to_send = ids.iter().cloned().collect::<Vec<_>>();
-            ids_to_send.extend(extra.iter());
+            ids_to_send.extend(extra.iter().cloned());
             ids_to_send.sort();
             ids_to_send.dedup();
             debug!("ids_to_send: {:?}", ids_to_send);
@@ -262,10 +247,11 @@ impl<'a> EchoNode<'a> {
                 self.node_id.clone().unwrap(),
                 key.clone(),
                 None,
-                Payload::GossipEcho { ids: ids_to_send },
+                Payload::GossipCount { adds: ids_to_send },
             );
             self.send(msg)?;
         }
+        */
         Ok(())
     }
 }

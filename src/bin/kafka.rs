@@ -1,24 +1,37 @@
-pub mod CountNode;
-pub mod EchoNode;
-pub mod KafkaNode;
-pub mod msg;
+use anyhow::Context;
+use fly::msg::{Event, Message};
+use fly::KafkaNode::KafkaNode;
+use log::{debug, info};
+use std::io::BufRead;
+use std::sync::mpsc::channel;
+use std::thread;
 
-#[test]
-fn func_test() -> anyhow::Result<()> {
-    //{"id":5,"src":"c2","dest":"n0","body":{"type":"topology","topology":{"n0":["n1"],"n1":["n0"]},"msg_id":1}}
-    //{"id":12,"src":"c4","dest":"n0","body":{"type":"broadcast","message":1,"msg_id":2}}
+fn main() -> anyhow::Result<()> {
+    env_logger::init();
+    info!("Setting up STDIN/STDOUT");
+    let stdin = std::io::stdin().lock();
+    let mut stdin = stdin.lines();
+
+    let stdout = std::io::stdout().lock();
+
+    let (tx, rx) = channel();
+
+    debug!("reading init message");
+
     let init_msg: Message = serde_json::from_str(
-        "{\"src\": \"c1\",\"dest\": \"n0\",\"body\": {\"type\":     \"init\", \"msg_id\":   1, \"node_id\":  \"n0\", \"node_ids\": [\"n1\"]}}"
+        &stdin
+            .next()
+            .expect("valid message")
+            .context("failed to read init message")?,
     )
     .context("failed to deserialize init")?;
 
-    let stdout = std::io::stdout().lock();
-    let (tx, rx) = channel();
-    let mut state = EchoNode::new(Event::Message(init_msg), stdout, tx.clone());
+    info!("Creating node");
+    let mut state = KafkaNode::new(Event::Message(init_msg), stdout, tx.clone());
 
+    drop(stdin);
     //drop(stdin);
-    //drop(stdin);
-    /*
+
     let jh = thread::spawn(move || {
         let stdin = std::io::stdin().lock();
         for line in stdin.lines() {
@@ -39,6 +52,6 @@ fn func_test() -> anyhow::Result<()> {
     }
 
     let _ = jh.join().expect("jh expect");
-    */
+
     Ok(())
 }

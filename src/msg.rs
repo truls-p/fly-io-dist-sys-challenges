@@ -82,4 +82,27 @@ pub enum Payload {
         node_ids: Vec<String>,
     },
     InitOk,
+    Send {
+        key: String,
+        msg: usize,
+    },
+    SendOk {
+        offset: usize,
+    },
+    Poll {
+        offsets: HashMap<String, usize>,
+    },
+    PollOk {
+        msgs: HashMap<String, Vec<(usize, usize)>>,
+    },
+    CommitOffsets {
+        offsets: HashMap<String, usize>,
+    },
+    CommitOffsetsOk,
+    ListCommittedOffsets {
+        keys: Vec<String>,
+    },
+    ListCommittedOffsetsOk {
+        offsets: HashMap<String, usize>,
+    },
 }
